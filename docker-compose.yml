@@ -1,0 +1,136 @@
+version: '3.8'
+
+volumes:
+  mongodb_data:
+
+services:
+  rabbitmq:
+    container_name: rabbitmq
+    image: rabbitmq:3-management
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    networks:
+      - vacancies_bot_network
+    healthcheck:
+      test: [ "CMD", "rabbitmqctl", "status" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  mongodb:
+    container_name: mongodb
+    image: mongodb/mongodb-community-server:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: vacancies
+    networks:
+      - vacancies_bot_network
+
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: vacancies-bot
+    networks:
+      - vacancies_bot_network
+
+  scheduler:
+    container_name: scheduler
+    image: kyljmeeski/vacancies-bot-scheduler:0.0.1
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      IMPORT_DELAY_IN_MINUTES: 60
+    networks:
+      - vacancies_bot_network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: always
+
+  importer:
+    container_name: importer
+    image: kyljmeeski/vacancies-bot-importer:0.0.1
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+    networks:
+      - vacancies_bot_network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      scheduler:
+        condition: service_started
+    restart: always
+
+  saver:
+    container_name: saver
+    image: kyljmeeski/vacancies-bot-saver:0.0.1
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      MONGODB_HOST: mongodb
+      MONGODB_PORT: 27017
+    networks:
+      - vacancies_bot_network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+      importer:
+        condition: service_started
+    restart: always
+
+  telegram_bot:
+    container_name: telegram_bot
+    image: kyljmeeski/vacancies-bot-telegram-bot:0.0.1
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: vacancies-bot
+      TELEGRAM_BOT_TOKEN: ${DB_PASSWORD}
+    networks:
+      - vacancies_bot_network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+
+  notifier:
+    container_name: notifier
+    image: kyljmeeski/vacancies-bot-notifier:0.0.1
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_NAME: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: vacancies-bot
+    networks:
+      - vacancies_bot_network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+      telegram_bot:
+        condition: service_started
+
+networks:
+  vacancies_bot_network:
+    driver: bridge
